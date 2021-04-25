@@ -29,7 +29,6 @@ class Connection {
     this.bodySize = 0;
     this.data = ''; // received data
     this.dataCount = 0; // received data count
-
     this.connect();
   }
 
@@ -60,9 +59,7 @@ class Connection {
       })
       .on('data', chunk => {
         // Emitted when data is received.
-        debug('socket event -> data');
         this.dataCount++;
-        this.data += chunk;
 
         if (this.dataCount === 1) {
           const contentLengthIndex = chunk.indexOf('Content-Length: ');
@@ -72,10 +69,53 @@ class Connection {
             this.contentLength = parseInt(chunk.slice(contentLengthIndex + 16, contentLengthIndex + 26).toString());
             const headerTailIndex = chunk.indexOf('\r\n\r\n');
             this.bodySize += Buffer.byteLength(chunk) - headerTailIndex - 4;
+            this.data += chunk;
+          } else {
+            let headerTailIndex = chunk.indexOf('\r\n\r\n');
+            if (headerTailIndex !== -1) {
+              this.bodySize += Buffer.byteLength(chunk) - headerTailIndex - 4;
+              this.data += chunk.substring(0, headerTailIndex + 4)
+              const chunkData = chunk.substring(headerTailIndex + 4)
+              const crlfIndex = chunkData.indexOf('\r\n');
+              const chunkSize = parseInt(chunkData.substring(0, crlfIndex), 16);
+              const chunkContext = chunkData.substring(crlfIndex + 2, chunkData.length - 2)
+  
+              this.contentLength += chunkSize + headerTailIndex + 4;
+              this.data += chunkContext;
+            } else {
+              let crlfIndex = chunk.indexOf('\r\n');
+              while (crlfIndex > -1) {
+                const chunkSize = parseInt(chunk.substring(0, crlfIndex), 16);
+                const crlfEndIndex = chunk.indexOf('\r\n', crlfIndex + 2);
+                const chunkContext = chunk.substring(crlfIndex + 2, crlfEndIndex)
+    
+                this.contentLength += parseInt(chunkSize, 16)
+                this.bodySize += parseInt(chunkSize, 16)
+                this.data += chunkContext;
+                
+                chunk = chunk.substring(crlfEndIndex + 2);
+                crlfIndex = crlfEndIndex;
+              }
+            }
           }
         } else {
           if (!this.chunked) {
             this.bodySize += Buffer.byteLength(chunk);
+            this.data += chunk;
+          } else {
+            let crlfIndex = chunk.indexOf('\r\n');
+            while (crlfIndex > -1) {
+              const chunkSize = parseInt(chunk.substring(0, crlfIndex), 16);
+              const crlfEndIndex = chunk.indexOf('\r\n', crlfIndex + 2);
+              const chunkContext = chunk.substring(crlfIndex + 2, crlfEndIndex)
+  
+              this.contentLength += parseInt(chunkSize, 16)
+              this.bodySize += parseInt(chunkSize, 16)
+              this.data += chunkContext;
+              
+              chunk = chunk.substring(crlfEndIndex + 2);
+              crlfIndex = crlfEndIndex;
+            }
           }
         }
 
