@@ -32,6 +32,27 @@ class Connection {
     this.connect();
   }
 
+  parseChunk(chunk) {
+    let lastChunkSize = -1;
+    let crlfIndex = chunk.indexOf('\r\n');
+    let crlfEndIndex = 0;
+    while (crlfIndex > -1) {
+      lastChunkSize = parseInt(chunk.substring(crlfEndIndex, crlfIndex), 16);
+      if (lastChunkSize === 0) {
+        break;
+      }
+      crlfEndIndex = chunk.indexOf('\r\n', crlfIndex + 2);
+      const chunkContext = chunk.substring(crlfIndex + 2, crlfEndIndex)
+
+      this.contentLength += parseInt(lastChunkSize, 16)
+      this.bodySize += parseInt(lastChunkSize, 16)
+      this.data += chunkContext;
+      crlfIndex = chunk.indexOf('\r\n', crlfEndIndex + 2);
+      crlfEndIndex += 2;
+    }
+    return lastChunkSize
+  }
+
   connect() {
     this.socket = new net.Socket();
     this.socket.setTimeout(this.options.idleTimeout);
@@ -58,9 +79,10 @@ class Connection {
         }
       })
       .on('data', chunk => {
+        debug('recevie data --> ${%s}', chunk)
         // Emitted when data is received.
         this.dataCount++;
-
+        let chunkSize = -1;
         if (this.dataCount === 1) {
           const contentLengthIndex = chunk.indexOf('Content-Length: ');
           this.chunked = contentLengthIndex === -1;
@@ -72,55 +94,22 @@ class Connection {
             this.data += chunk;
           } else {
             let headerTailIndex = chunk.indexOf('\r\n\r\n');
-            if (headerTailIndex !== -1) {
-              this.bodySize += Buffer.byteLength(chunk) - headerTailIndex - 4;
-              this.data += chunk.substring(0, headerTailIndex + 4)
-              const chunkData = chunk.substring(headerTailIndex + 4)
-              const crlfIndex = chunkData.indexOf('\r\n');
-              const chunkSize = parseInt(chunkData.substring(0, crlfIndex), 16);
-              const chunkContext = chunkData.substring(crlfIndex + 2, chunkData.length - 2)
-  
-              this.contentLength += chunkSize + headerTailIndex + 4;
-              this.data += chunkContext;
-            } else {
-              let crlfIndex = chunk.indexOf('\r\n');
-              while (crlfIndex > -1) {
-                const chunkSize = parseInt(chunk.substring(0, crlfIndex), 16);
-                const crlfEndIndex = chunk.indexOf('\r\n', crlfIndex + 2);
-                const chunkContext = chunk.substring(crlfIndex + 2, crlfEndIndex)
-    
-                this.contentLength += parseInt(chunkSize, 16)
-                this.bodySize += parseInt(chunkSize, 16)
-                this.data += chunkContext;
-                
-                chunk = chunk.substring(crlfEndIndex + 2);
-                crlfIndex = crlfEndIndex;
-              }
-            }
+            this.bodySize += Buffer.byteLength(chunk) - headerTailIndex - 4;
+            this.data += chunk.substring(0, headerTailIndex + 4)
+            const chunkData = chunk.substring(headerTailIndex + 4)
+            chunkSize = this.parseChunk(chunkData)
+            this.contentLength += chunkSize + headerTailIndex + 4;
           }
         } else {
           if (!this.chunked) {
             this.bodySize += Buffer.byteLength(chunk);
             this.data += chunk;
           } else {
-            let crlfIndex = chunk.indexOf('\r\n');
-            while (crlfIndex > -1) {
-              const chunkSize = parseInt(chunk.substring(0, crlfIndex), 16);
-              const crlfEndIndex = chunk.indexOf('\r\n', crlfIndex + 2);
-              const chunkContext = chunk.substring(crlfIndex + 2, crlfEndIndex)
-  
-              this.contentLength += parseInt(chunkSize, 16)
-              this.bodySize += parseInt(chunkSize, 16)
-              this.data += chunkContext;
-              
-              chunk = chunk.substring(crlfEndIndex + 2);
-              crlfIndex = crlfEndIndex;
-            }
+            chunkSize = this.parseChunk(chunk)
           }
         }
 
-        const zeroIndex = chunk.lastIndexOf('\r\n0');
-        if ((this.bodySize && this.bodySize >= this.contentLength) || zeroIndex > -1) {
+        if ((this.bodySize && this.bodySize >= this.contentLength) || chunkSize === 0) {
           this.successCall(this.data);
           this.release();
         }
